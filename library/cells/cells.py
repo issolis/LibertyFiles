@@ -1,4 +1,4 @@
-from libertyscope.explorer import LibertyExplorer
+from explorer.explorer import LibertyExplorer
 
 from .cell.cell import Cell
 

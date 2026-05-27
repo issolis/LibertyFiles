@@ -1,4 +1,4 @@
-from libertyscope.explorer import LibertyExplorer
+from explorer.explorer import LibertyExplorer
 from .utils import clean_str, to_float
 from .timingArc import TimingArc
 

@@ -1,4 +1,4 @@
-from libertyscope.explorer import LibertyExplorer
+from explorer.explorer import LibertyExplorer
 from  .utils import to_float_list, to_float_matrix
 
 
@@ -78,7 +78,7 @@ class Lut:
                 "i0": i0,
                 "i1": i1,
                 "j0": j0,
-                "j1": j1,
+                "j1": j1, 
             },
         }
 
@@ -88,7 +88,9 @@ class Lut:
             row = diffs.index(min(diffs))
         else:
             row = 0
+        return self.lookup_1d_fixed_row(output_load, row=row)
 
+    def lookup_1d_fixed_row(self, output_load, row=0):
         y, clamped_y = self._clamp(output_load, self.index_2)
         j0, j1 = self._find_bounds(y, self.index_2)
 

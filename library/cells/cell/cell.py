@@ -1,4 +1,4 @@
-from libertyscope.explorer import LibertyExplorer
+from explorer.explorer import LibertyExplorer
 from .utils import to_float
 from .pin import Pin
 

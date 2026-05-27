@@ -1,5 +1,5 @@
-from libertyscope.explorer import load_liberty, LibertyExplorer
-from libertyscope.explorer import load_liberty, LibertyExplorer
+from explorer.explorer import load_liberty, LibertyExplorer
+from explorer.explorer import load_liberty, LibertyExplorer
 from .cells.cells import Cells
 
 
