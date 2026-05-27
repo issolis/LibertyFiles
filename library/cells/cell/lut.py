@@ -17,6 +17,8 @@ class Lut:
     def _clamp(self, x, axis):
         was_clamped = False
 
+        
+    
         if x < axis[0]:
             x = axis[0]
             was_clamped = True

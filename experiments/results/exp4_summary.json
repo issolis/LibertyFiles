@@ -7,8 +7,8 @@
   "nearest_row_slew_ns": 0.0409838,
   "lut_load_min_fF": 0.365616,
   "lut_load_max_fF": 60.73,
-  "underestimation_pct_at_1_5x": 30.658533902659247,
-  "underestimation_pct_at_2_0x": 46.644892817819866,
+  "underestimation_pct_at_1_5x": 0.5792843133806684,
+  "underestimation_pct_at_2_0x": 1.1271485823514418,
   "max_clamped_value_ns": 0.170748,
   "tail_anchor_loads_fF": [
     7.59125,
