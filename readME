@@ -1,0 +1,336 @@
+# LibertyScope
+
+Herramienta Python para análisis, cálculo de delays e inspección de archivos Liberty (.lib) en flujos EDA/VLSI.
+
+Parsea archivos Liberty, extrae las celdas estándar con sus pines y timing arcs, y calcula propagation delay (tp) y output slew mediante interpolación bilineal sobre las tablas NLDM (Non-Linear Delay Model).
+
+
+## Requisitos
+
+- Python 3.10+
+- liberty-parser 0.0.29: `pip install liberty-parser==0.0.29`
+- Un archivo .lib (probado con NanGate 45nm Open Cell Library, corner típico TT 1.1V 25°C)
+
+
+## Estructura del proyecto
+
+```
+IEEE/
+├── test.py                              <- script de prueba
+├── NangateOpenCellLibrary_typical.lib   <- archivo .lib (no incluido)
+│
+├── libertyscope/                        <- capa de parseo (wrapper sobre liberty-parser)
+│   ├── __init__.py
+│   └── explorer.py                      <- LibertyExplorer, load_liberty()
+│
+└── library/                             <- modelo de datos y motor de cálculo
+    ├── __init__.py
+    ├── library.py                       <- Library: metadatos del .lib
+    └── cells/
+        ├── __init__.py
+        ├── cells.py                     <- Cells: lista de celdas
+        └── cell/
+            ├── __init__.py
+            ├── cell.py                  <- Cell: pines, arcs, compute()
+            ├── pin.py                   <- Pin: dirección, capacitancia
+            ├── timingArc.py             <- TimingArc: arcs de propagación
+            ├── lut.py                   <- Lut: interpolación bilineal y 1D
+            └── utils.py                 <- clean_str, to_float, to_float_list, to_float_matrix
+```
+
+
+## Arquitectura
+
+El proyecto tiene dos capas:
+
+### Capa 1: libertyscope (parseo)
+
+`LibertyExplorer` envuelve el árbol que produce `liberty-parser` y permite navegarlo:
+
+```python
+from libertyscope import load_liberty
+
+lib = load_liberty("NangateOpenCellLibrary_typical.lib")
+cell = lib.find("cell", "INV_X1")
+pin = cell.find("pin", "ZN")
+```
+
+Métodos principales: `get(attr)`, `children(kind)`, `find(kind, name)`, `child_kinds()`, `child_names(kind)`, `all_child_names()`.
+
+Esta capa no interpreta los datos — solo los expone.
+
+### Capa 2: library (modelo + cálculo)
+
+Toma los datos del explorer y los convierte en objetos tipados con métodos de cálculo:
+
+```
+Library
+└── Cells
+    └── Cell (x134)
+        ├── input_pins: dict[str, Pin]      <- nombre: Pin con capacitance
+        ├── output_pins: dict[str, Pin]     <- nombre: Pin con timing_arcs
+        └── timing_arcs: list[TimingArc]    <- solo los de propagación
+            └── luts: dict[str, Lut]        <- cell_rise, cell_fall, rise_transition, fall_transition
+```
+
+
+## Clases principales
+
+### Library (`library/library.py`)
+
+Carga el .lib y extrae los metadatos globales.
+
+| Atributo | Tipo | Ejemplo |
+|---|---|---|
+| name | str | "NangateOpenCellLibrary" |
+| delay_model | str | "table_lookup" |
+| time_unit | str | "1ns" |
+| cap_load_unit | tuple | (1, "ff") |
+| nom_voltage | float | 1.1 |
+| nom_temperature | float | 25.0 |
+| cells | Cells | 134 celdas |
+
+### Cell (`library/cells/cell/cell.py`)
+
+Representa una celda estándar. Al construirse, carga automáticamente sus pines y timing arcs.
+
+Atributos de datos:
+
+| Atributo | Tipo | Descripción |
+|---|---|---|
+| name | str | Nombre de la celda (ej. "AND2_X1") |
+| area | float | Área de la celda |
+| input_pins | dict[str, Pin] | Pines de entrada con capacitancia |
+| output_pins | dict[str, Pin] | Pines de salida con timing arcs |
+| timing_arcs | list[TimingArc] | Todos los arcs de propagación |
+
+Atributos de cálculo (se llenan después de llamar `compute()`):
+
+| Atributo | Tipo | Descripción |
+|---|---|---|
+| cell_rise | float | Delay de subida del peor arc |
+| cell_fall | float | Delay de bajada del peor arc |
+| rise_transition | float | Slew de subida del peor arc |
+| fall_transition | float | Slew de bajada del peor arc |
+| tp | float | max(cell_rise, cell_fall) — propagation delay |
+| slew_out | float | max(rise_transition, fall_transition) — output slew |
+| worst_arc | TimingArc | El arc que produjo el peor delay |
+| computed | bool | True si ya se llamó compute() |
+
+Métodos:
+
+| Método | Descripción |
+|---|---|
+| `compute(input_slew, output_load)` | Calcula las 4 interpolaciones, guarda los resultados internamente, devuelve dict |
+| `getInputCapacitance()` | Suma de capacitancias de todos los pines de entrada |
+| `print_info(show_values=False)` | Imprime toda la info de la celda, incluyendo resultados si ya se computó |
+| `summary()` | Imprime resumen corto |
+
+### Pin (`library/cells/cell/pin.py`)
+
+| Atributo | Tipo | Descripción |
+|---|---|---|
+| name | str | Nombre del pin |
+| direction | str | "input" o "output" |
+| capacitance | float | Capacitancia de entrada (fF) |
+| timing_arcs | list[TimingArc] | Solo en pines de salida, solo arcs de propagación |
+
+El filtro de arcs ocurre aquí: solo se cargan los arcs donde `arc.is_propagation()` es True.
+
+### TimingArc (`library/cells/cell/timingArc.py`)
+
+Relación temporal entre un pin de entrada y uno de salida.
+
+| Atributo | Tipo | Descripción |
+|---|---|---|
+| output_pin | str | Pin de salida |
+| related_pin | str | Pin de entrada que dispara este arc |
+| timing_sense | str | "positive_unate", "negative_unate", "non_unate" |
+| timing_type | str/None | None=combinacional, "rising_edge"/"falling_edge"=secuencial |
+| luts | dict[str, Lut] | Las 4 tablas: cell_rise, cell_fall, rise_transition, fall_transition |
+
+Métodos:
+
+| Método | Descripción |
+|---|---|
+| `is_propagation()` | True si es arc de propagación (no setup/hold/pulse_width) |
+| `compute(input_slew, output_load)` | Interpola las 4 LUTs, devuelve dict con los 4 resultados |
+| `compute_1d(output_load)` | Interpolación 1D ignorando el slew (para comparación Exp. 2) |
+
+### Lut (`library/cells/cell/lut.py`)
+
+Tabla NLDM 2D. En NanGate 45nm todas son 7x7.
+
+| Atributo | Tipo | Descripción |
+|---|---|---|
+| name | str | Tipo de tabla (ej. "cell_rise") |
+| template | str | Nombre del template (ej. "Timing_7_7") |
+| index_1 | list[float] | Eje de input slew (ns) |
+| index_2 | list[float] | Eje de output load (fF) |
+| values | list[list[float]] | Matriz de valores |
+
+Métodos:
+
+| Método | Descripción |
+|---|---|
+| `lookup(input_slew, output_load)` | Interpolación bilineal 2D. Devuelve dict con value, bounds, clamping info |
+| `lookup_1d(output_load, input_slew=None)` | Interpolación lineal 1D sobre la fila más cercana al slew dado |
+
+Ambos métodos aplican clamping (constant-edge extension) cuando el punto queda fuera del rango del LUT.
+
+### utils (`library/cells/cell/utils.py`)
+
+Funciones auxiliares para parsear datos del liberty-parser:
+
+| Función | Descripción |
+|---|---|
+| `clean_str(value)` | Quita comillas y espacios de strings del .lib |
+| `to_float(value)` | Convierte a float, devuelve None si no puede |
+| `to_float_list(value)` | Parsea strings como "0.01, 0.1, 1.0" a lista de floats |
+| `to_float_matrix(value)` | Parsea la lista de strings del LUT a matriz de floats |
+
+
+## Uso básico
+
+### Cargar library y consultar una celda
+
+```python
+from library.library import Library
+
+lib = Library("NangateOpenCellLibrary_typical.lib")
+cell = lib.cells.cells[0]   # AND2_X1
+cell.print_info()
+```
+
+### Calcular delay de una celda
+
+```python
+cell.compute(input_slew=0.05, output_load=10.0)
+
+print(cell.tp)          # 0.063704 ns
+print(cell.slew_out)    # 0.026555 ns
+print(cell.cell_rise)   # 0.062333 ns
+print(cell.cell_fall)   # 0.063704 ns
+```
+
+Después de `compute()`, los 6 resultados quedan guardados como atributos internos de la celda.
+
+### Cadena de delay (propagación realista)
+
+El slew de salida de cada celda se usa como input slew de la siguiente. La carga de cada celda es la capacitancia del pin de entrada de la celda aguas abajo.
+
+```python
+def findCell(name):
+    for cell in lib.cells.cells:
+        if cell.name == name:
+            return cell
+
+inv = findCell("INV_X1")
+and2 = findCell("AND2_X1")
+dff = findCell("DFF_X1")
+
+# etapa 1: INV maneja la capacitancia de AND2.A1
+inv.compute(input_slew=0.04, output_load=and2.input_pins["A1"].capacitance)
+
+# etapa 2: AND recibe el slew del INV, maneja la capacitancia de DFF.CK
+and2.compute(input_slew=inv.slew_out, output_load=dff.input_pins["CK"].capacitance)
+
+# etapa 3: DFF recibe el slew del AND
+dff.compute(input_slew=and2.slew_out, output_load=0.0)
+
+total = inv.tp + and2.tp + dff.tp
+print(f"Total path delay: {total:.6f} ns")   # 0.135016 ns
+```
+
+### Comparar interpolación bilineal vs 1D
+
+```python
+lut = cell.timing_arcs[0].luts["cell_rise"]
+
+r_2d = lut.lookup(input_slew=0.05, output_load=10.0)
+r_1d = lut.lookup_1d(output_load=10.0, input_slew=0.05)
+
+error = abs(r_2d["value"] - r_1d["value"]) / r_2d["value"] * 100
+print(f"Error 1D vs 2D: {error:.1f}%")
+```
+
+
+## Flujo de datos
+
+```
+.lib (texto)
+  │
+  ▼
+liberty-parser          parsea el texto a un árbol de Group
+  │
+  ▼
+LibertyExplorer         envuelve el árbol, permite navegarlo
+  │
+  ▼
+Library                 extrae metadatos globales (unidades, voltage, temperatura)
+  │
+  ▼
+Cells                   lista de Cell
+  │
+  ▼
+Cell                    para cada celda:
+  ├── Pin (input)         guarda name + capacitance
+  └── Pin (output)        guarda name + timing_arcs
+        │
+        ▼
+      TimingArc           para cada arc de propagación:
+        │                   guarda related_pin, sense, type
+        ▼
+      Lut (x4)            para cada tabla (cell_rise, cell_fall, rise/fall_transition):
+                            parsea index_1, index_2, values a floats
+                            │
+                            ▼
+                          lookup()     interpolación bilineal 2D
+                          lookup_1d()  interpolación lineal 1D
+```
+
+
+## Qué calcula compute()
+
+Cuando llamas `cell.compute(input_slew, output_load)`:
+
+1. Itera todos los timing arcs de la celda.
+2. Por cada arc, interpola las 4 LUTs con el input_slew y output_load dados.
+3. Calcula `delay = max(cell_rise, cell_fall)` de cada arc.
+4. Se queda con el arc que produce el mayor delay (worst-case).
+5. Guarda los 4 valores interpolados de ese arc como atributos internos.
+6. Calcula `tp = max(cell_rise, cell_fall)` y `slew_out = max(rise_transition, fall_transition)`.
+
+El worst-case se define como el mayor delay entre todos los arcs y ambas transiciones (rise y fall). Esto es consistente con la metodología de STA (Static Timing Analysis).
+
+
+## Interpolación bilineal
+
+La interpolación sigue la ecuación del NLDM (IEEE 1481):
+
+```
+t(x, y) = (1-u)(1-v)·Q00 + u(1-v)·Q10 + (1-u)v·Q01 + uv·Q11
+```
+
+Donde:
+- x = input_slew, y = output_load
+- u = fracción entre los dos valores de slew más cercanos en index_1
+- v = fracción entre los dos valores de carga más cercanos en index_2
+- Q00, Q10, Q01, Q11 = los 4 valores del LUT en las esquinas del rectángulo
+
+Los índices se localizan por búsqueda binaria (bisect_right). Si el punto queda fuera del rango del LUT, se aplica clamping (constant-edge extension): se usa el valor del borde más cercano.
+
+
+## Datos del NanGate 45nm
+
+- 134 celdas totales, 125 con timing arcs de propagación válidos
+- LUTs de 7x7 (template Timing_7_7)
+- index_1: input slew de 0.00117 a 0.1985 ns
+- index_2: output load de 0.3656 a 60.58 fF
+- Unidades: tiempo en ns, capacitancia en fF, voltaje en V
+- Corner: típico (TT), 1.1V, 25°C
+
+
+## Licencia
+
+Apache 2.0
